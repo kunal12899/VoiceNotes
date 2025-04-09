@@ -1,84 +1,190 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
 
 interface Note {
   id: string;
   content: string;
-  created_at: string;
   category?: string;
   tags?: string[];
   is_archived?: boolean;
-  audio_url?: string;
-  formatted_content?: string;
+  user_id: string;
+  created_at: string;
 }
 
-interface NoteListProps {
-  notes: Note[];
-  onDelete: (id: string) => void;
-  onArchive?: (id: string) => void;
-  onShare?: (id: string) => void;
-  onEdit?: (id: string) => void;
-}
-
-export default function NoteList({
-  notes,
-  onDelete,
-  onArchive,
-  onShare,
-  onEdit,
-}: NoteListProps) {
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
+export default function NoteList() {
+  const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [showArchived, setShowArchived] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [newNoteCategory, setNewNoteCategory] = useState('');
   const router = useRouter();
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
   const categories = ['all', 'work', 'personal', 'ideas', 'meetings', 'other'];
-  const filteredNotes = notes
-    .filter((note) => (showArchived ? note.is_archived : !note.is_archived))
-    .filter((note) => {
-      if (selectedCategory === 'all') return true;
-      return note.category === selectedCategory;
-    })
-    .filter((note) => {
-      if (!searchQuery) return true;
-      return (
-        note.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        note.tags?.some((tag) =>
-          tag.toLowerCase().includes(searchQuery.toLowerCase())
-        )
-      );
-    });
 
-  const handlePlayAudio = async (audioUrl: string) => {
-    const audio = new Audio(audioUrl);
-    audio.play();
+  useEffect(() => {
+    fetchNotes();
+  }, [selectedCategory, showArchived]);
+
+  const startVoiceRecording = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome.');
+      return;
+    }
+
+    const recognition = new (window as any).webkitSpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = Array.from(event.results)
+        .map((result: any) => result[0])
+        .map((result: any) => result.transcript)
+        .join('');
+      
+      setNewNoteContent(transcript);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      setIsRecording(false);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognition.start();
   };
 
+  const createNote = async () => {
+    if (!newNoteContent.trim()) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        router.push('/auth');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('notes')
+        .insert([
+          {
+            content: newNoteContent,
+            category: newNoteCategory || 'other',
+            user_id: session.user.id,
+            is_archived: false,
+          }
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setNotes([data, ...notes]);
+      setNewNoteContent('');
+      setNewNoteCategory('');
+    } catch (error) {
+      console.error('Error creating note:', error);
+    }
+  };
+
+  const fetchNotes = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        router.push('/auth');
+        return;
+      }
+
+      let query = supabase
+        .from('notes')
+        .select('*')
+        .eq('user_id', session.user.id);
+
+      if (selectedCategory !== 'all') {
+        query = query.eq('category', selectedCategory);
+      }
+
+      if (!showArchived) {
+        query = query.eq('is_archived', false);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setNotes(data || []);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching notes:', error);
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('notes')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setNotes(notes.filter(note => note.id !== id));
+    } catch (error) {
+      console.error('Error deleting note:', error);
+    }
+  };
+
+  const handleArchive = async (id: string) => {
+    try {
+      const note = notes.find(n => n.id === id);
+      if (!note) return;
+
+      const { error } = await supabase
+        .from('notes')
+        .update({ is_archived: !note.is_archived })
+        .eq('id', id);
+
+      if (error) throw error;
+      setNotes(notes.map(n => n.id === id ? { ...n, is_archived: !n.is_archived } : n));
+    } catch (error) {
+      console.error('Error archiving note:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="text-gray-600 dark:text-gray-300">Loading...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="mt-8">
-      <div className="flex flex-col md:flex-row gap-4 mb-6">
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="Search notes..."
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        <div className="flex gap-2">
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Your Notes</h1>
+        <div className="flex flex-wrap gap-4">
           <select
-            className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
           >
             {categories.map((category) => (
               <option key={category} value={category}>
@@ -88,170 +194,116 @@ export default function NoteList({
           </select>
           <button
             onClick={() => setShowArchived(!showArchived)}
-            className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700"
           >
-            {showArchived ? 'Show Active' : 'Show Archived'}
+            {showArchived ? 'Hide Archived' : 'Show Archived'}
           </button>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {filteredNotes.map((note) => (
-          <div
-            key={note.id}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow"
-          >
-            <div className="flex justify-between items-start mb-2">
-              {note.category && (
-                <span className="px-2 py-1 text-xs font-semibold bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 rounded-full">
-                  {note.category}
-                </span>
-              )}
-              <div className="flex gap-2">
-                {onEdit && (
-                  <button
-                    onClick={() => onEdit(note.id)}
-                    className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                    aria-label="Edit note"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                      />
-                    </svg>
-                  </button>
-                )}
-                {onShare && (
-                  <button
-                    onClick={() => onShare(note.id)}
-                    className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                    aria-label="Share note"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                      />
-                    </svg>
-                  </button>
-                )}
-                {onArchive && (
-                  <button
-                    onClick={() => onArchive(note.id)}
-                    className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                    aria-label={note.is_archived ? 'Unarchive note' : 'Archive note'}
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
-                      />
-                    </svg>
-                  </button>
-                )}
-                <button
-                  onClick={() => onDelete(note.id)}
-                  className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                  aria-label="Delete note"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="prose dark:prose-invert max-w-none">
-              {note.formatted_content ? (
-                <div
-                  dangerouslySetInnerHTML={{ __html: note.formatted_content }}
-                />
-              ) : (
-                <p className="text-gray-700 dark:text-gray-300">
-                  {note.content}
-                </p>
-              )}
-            </div>
-
-            {note.tags && note.tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {note.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {note.audio_url && (
-              <button
-                onClick={() => handlePlayAudio(note.audio_url!)}
-                className="mt-2 flex items-center text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300"
+      <div className="mb-8 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <div className="flex flex-col gap-4">
+          <textarea
+            value={newNoteContent}
+            onChange={(e) => setNewNoteContent(e.target.value)}
+            placeholder="Start typing or use voice input..."
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white min-h-[100px]"
+          />
+          <div className="flex gap-4">
+            <select
+              value={newNoteCategory}
+              onChange={(e) => setNewNoteCategory(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            >
+              <option value="">Select Category</option>
+              {categories.filter(cat => cat !== 'all').map((category) => (
+                <option key={category} value={category}>
+                  {category.charAt(0).toUpperCase() + category.slice(1)}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={startVoiceRecording}
+              className={`flex items-center gap-2 px-4 py-2 font-medium rounded-md ${
+                isRecording
+                  ? 'bg-red-500 text-white hover:bg-red-600'
+                  : 'bg-indigo-500 text-white hover:bg-indigo-600'
+              } transition-colors`}
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
               >
-                <svg
-                  className="w-5 h-5 mr-1"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
-                  />
-                </svg>
-                Play Recording
-              </button>
-            )}
-
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              {new Date(note.created_at).toLocaleDateString()}
-            </p>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                />
+              </svg>
+              {isRecording ? 'Recording...' : 'Start Voice Input'}
+            </button>
+            <button
+              onClick={createNote}
+              disabled={!newNoteContent.trim()}
+              className="px-4 py-2 font-medium text-white bg-green-500 rounded-md hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Create Note
+            </button>
           </div>
-        ))}
+        </div>
       </div>
 
-      {filteredNotes.length === 0 && (
-        <div className="text-center py-8">
-          <p className="text-gray-500 dark:text-gray-400">
-            No notes found. {showArchived ? 'No archived notes.' : 'Create a new note to get started!'}
-          </p>
+      {notes.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-gray-600 dark:text-gray-400">No notes found. Start by creating a new note!</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {notes.map((note) => (
+            <div
+              key={note.id}
+              className={`p-6 rounded-lg border ${
+                note.is_archived
+                  ? 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+              }`}
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div className="flex items-center">
+                  {note.category && (
+                    <span className="px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded-full">
+                      {note.category}
+                    </span>
+                  )}
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => handleArchive(note.id)}
+                    className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  >
+                    {note.is_archived ? 'Unarchive' : 'Archive'}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(note.id)}
+                    className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+              <div className="prose dark:prose-invert max-w-none">
+                <p className="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">
+                  {note.content}
+                </p>
+              </div>
+              <div className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                {new Date(note.created_at).toLocaleDateString()}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
