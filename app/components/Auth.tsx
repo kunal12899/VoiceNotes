@@ -19,15 +19,26 @@ export default function Auth() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
+  // Get the base URL for redirects
+  const getBaseUrl = () => {
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    // Fallback for SSR
+    return process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setMessage(null);
 
+    const baseUrl = getBaseUrl();
+
     try {
       if (isForgotPassword) {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+          redirectTo: `${baseUrl}/auth/callback?next=/reset-password`,
         });
         if (error) throw error;
         setMessage('Password reset instructions have been sent to your email.');
@@ -39,7 +50,7 @@ export default function Auth() {
           email,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            emailRedirectTo: `${baseUrl}/auth/callback`,
           },
         });
         
