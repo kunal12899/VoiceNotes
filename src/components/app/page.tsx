@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import AudioRecorder from '@/components/AudioRecorder';
-import NoteList from '@/components/NoteList';
+import AudioRecorder from '../components/AudioRecorder';
+import NoteList from '../components/NoteList';
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize Supabase client
