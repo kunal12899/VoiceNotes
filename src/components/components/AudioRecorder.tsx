@@ -6,6 +6,8 @@ interface AudioRecorderProps {
   onTranscription: (text: string) => void;
 }
 
+type Priority = 'low' | 'medium' | 'high';
+
 const AudioRecorder = ({ onTranscription }: AudioRecorderProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcription, setTranscription] = useState('');
